@@ -17,6 +17,7 @@
 
 #include "polly/CodeGen/IRBuilder.h"
 #include "polly/Support/ScopHelper.h"
+#include "polly/ScopMatcher.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "isl/isl-noexceptions.h"
 
@@ -107,6 +108,9 @@ public:
   ///                    memory accesses.
   void copyStmt(ScopStmt &Stmt, LoopToScevMapT &LTS,
                 isl_id_to_ast_expr *NewAccesses);
+
+  void insertLoopReplacement(ReplacementEmitter *emitter, LoopToScevMapT &LTS,
+                             isl_id_to_ast_expr *NewAccesses);
 
   /// Remove a ScopArrayInfo's allocation from the ScalarMap.
   ///

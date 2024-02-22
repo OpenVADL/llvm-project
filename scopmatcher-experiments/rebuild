@@ -1,0 +1,390 @@
+# ===- rebuild - Run llvm tools to get output from ScopMatcher      -------===//
+#
+#  Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+#  See https://llvm.org/LICENSE.txt for license information.
+#  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#
+# ===----------------------------------------------------------------------===//
+
+# call this like so, quotes are important
+# bash ../clean && bash -x ../rebuild "*.c" "" && ./x86_64.exe
+
+set -e
+set -x
+
+FILELIST="$1"
+ADDITIONAL_CFLAGS="$2"
+
+
+ADDITIONAL_LDFLAGS="-lm"
+VECTORIZER="$3"
+POLLY="$4"
+USE_LLVM_VECT="$5"
+
+
+CWD=$(realpath $(dirname "$0"))
+
+# config should define LLVM and OPENBLAS
+source $CWD/config
+
+CLANG="$LLVM"/build/bin/clang
+OPT="$LLVM"/build/bin/opt
+LLC="$LLVM"/build/bin/llc
+ASSEMBLER="$LLVM"/build/bin/llvm-mc
+LINKER=gcc
+GCC=gcc
+
+SME_CLANG=""
+SME_LCC=""
+# SME_CLANG="-Xclang -target-feature -Xclang +sme -Xclang -target-feature -Xclang +sme-i16i64"
+# SME_ASSEMBLER="-mattr=+sme -mattr=+sme-i16i64"
+
+OPTIMIZATION_LEVEL=-O3
+
+OPTIMIZATION_OPTIONS="-fno-unroll-loops"
+OPTIMIZATION_OPTIONS_OPT="--disable-loop-unrolling"
+OPTIMIZATION_OPTIONS_LLC="--unroll-max-upperbound=0"
+# OPTIMIZATION_OPTIONS=""
+# OPTIMIZATION_OPTIONS_OPT=""
+# OPTIMIZATION_OPTIONS_LLC=""
+
+# VECTORIZER=matmul
+# VECTORIZER=matmul-lmn
+# VECTORIZER=matmul-alpha-lmn
+# VECTORIZER=vect-matmul
+# VECTORIZER=vect-matmul-mn
+# VECTORIZER=dotprod
+# VECTORIZER=dotprod-n
+# VECTORIZER=axpy
+# VECTORIZER=axpy-n
+
+# VECTORIZER=none
+# VECTORIZER=exp
+# VECTORIZER=exp-n
+
+if [ "$POLLY" = "on" ]; then
+POLLY_FAST="\
+  -basic-aa \
+  -polly-process-unprofitable \
+  -polly-use-llvm-names \
+  \
+  -polly-stmt-granularity=scalar-indep \
+  -polly-allow-unsigned-operations \
+  -polly-ignore-func=impl_ \
+  -polly-scop-matcher \
+  -polly-select-scop-matcher="$VECTORIZER" \
+  -polly-codegen \
+"
+else
+POLLY_FAST=""
+fi
+
+if [ "$USE_LLVM_VECT" = "on" ]; then
+LLVM_VECTORIZE="-force-vector-interleave=1 \
+  -force-vector-width=4 \
+  -force-ordered-reductions \
+"
+else
+LLVM_VECTORIZE="--vectorize-loops=false"
+fi
+
+RUNTIME_DIR="$LLVM"/scopmatcher-experiments/matmul
+RUNTIME="$RUNTIME_DIR"/impl.c
+ADDITIONAL_CFLAGS="-I$OPENBLAS/build/generated -I$OPENBLAS/build-I $RUNTIME_DIR $ADDITIONAL_CFLAGS"
+ADDITIONAL_LDFLAGS="\
+  -lopenblas \
+  -lm \
+  -L $OPENBLAS/build/lib \
+"
+FILELIST="$RUNTIME $FILELIST"
+
+source $CWD/gcc-search
+echo $GCC_SEARCH
+
+# This options prevents the the
+# generation of calls to some intrinsics,
+# e.g. fmuladd
+# -ffp-contract=off \
+function run-clang() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  "$CLANG" \
+  -I "$LLVM"/clang/lib/Headers \
+  $GCC_SEARCH \
+  -ffp-contract=off \
+  -Wall -Wextra \
+  -Wno-implicit-function-declaration \
+  $ADDITIONAL_CFLAGS \
+  -S -emit-llvm \
+  --target="$TARGET" \
+  -march="$TUNE" \
+  $SME_CLANG \
+  -O0 \
+  -Xclang -disable-O0-optnone \
+  -o "$TARGET"."$FILE".ll \
+  "$FILE".c \
+  > "$TARGET"."$FILE".clang.log \
+  2>&1
+}
+
+function run-clang-only {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  "$CLANG" \
+  -I "$LLVM"/clang/lib/Headers \
+  $GCC_SEARCH \
+  -ffp-contract=off \
+  -Wall -Wextra \
+  -Wno-implicit-function-declaration \
+  $ADDITIONAL_CFLAGS \
+  --target="$TARGET" \
+  -march="$TUNE" \
+  $SME_CLANG \
+  "$OPTIMIZATION_LEVEL" \
+  $OPTIMIZATION_OPTIONS \
+  -c \
+  -o "$TARGET"."$FILE".o \
+  "$FILE".c \
+  > "$TARGET"."$FILE".clang-only.log \
+  2>&1
+}
+
+#   -debug-pass-manager=verbose \
+#   -debug \
+
+function run-fast {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  "$CLANG" \
+  "$FILE".c \
+  -I "$LLVM"/clang/lib/Headers \
+  $GCC_SEARCH \
+  -ffp-contract=off \
+  -Wall -Wextra \
+  -Wno-implicit-function-declaration \
+  $ADDITIONAL_CFLAGS \
+  -S -emit-llvm \
+  --target="$TARGET" \
+  -march="$TUNE" \
+  $SME_CLANG \
+  -O0 \
+  -Xclang -disable-O0-optnone \
+  -o - \
+  | \
+  "$OPT" \
+  -march="$TUNE" \
+  -mcpu="$TUNE" \
+  -S \
+  -polly-canonicalize \
+  -o - \
+  | \
+  "$OPT" \
+  -march="$TUNE" \
+  -mcpu="$TUNE" \
+  $POLLY_FAST \
+  -o - \
+  | \
+  "$OPT" \
+  "$OPTIMIZATION_LEVEL" \
+  $OPTIMIZATION_OPTIONS_OPT \
+  -march="$TUNE" \
+  -mcpu="$TUNE" \
+  $LLVM_VECTORIZE \
+  -S \
+  -o - \
+  | \
+  "$LLC" \
+  "$OPTIMIZATION_LEVEL" \
+  $OPTIMIZATION_OPTIONS_LLC \
+  -march="$ARCH" \
+  -mcpu="TUNE" \
+  --filetype=obj \
+  -o "$TARGET"."$FILE".o
+}
+
+function run-polly() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  "$OPT" \
+  -debug-pass-manager=verbose \
+  -debug \
+  -march="$TUNE" \
+  -mcpu="$TUNE" \
+  -S \
+  -polly-canonicalize \
+  -o "$TARGET"."$FILE".preopt.ll \
+  "$TARGET"."$FILE".ll \
+  > "$TARGET"."$FILE".preopt.log \
+  2>&1
+
+  time "$OPT" \
+  -debug-pass-manager=verbose \
+  -debug \
+  -march="$TUNE" \
+  -mcpu="$TUNE" \
+  -S \
+  -basic-aa \
+  -polly-process-unprofitable \
+  -polly-use-llvm-names \
+  \
+  -polly-stmt-granularity=scalar-indep \
+  -polly-allow-dereference-of-all-function-parameters=true \
+  -polly-ignore-func=impl_ \
+  -polly-allow-unsigned-operations \
+  -polly-print-function-dependences \
+  -polly-print-instructions \
+  -polly-scop-matcher \
+  -polly-select-scop-matcher="$VECTORIZER" \
+  -polly-print-scop-matcher \
+  -polly-codegen \
+  -o "$TARGET"."$FILE".polly.ll \
+  "$TARGET"."$FILE".preopt.ll \
+  > "$TARGET"."$FILE".polly.log \
+  2>&1
+}
+
+function bypass-polly() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+  cp "$TARGET"."$FILE".ll "$TARGET"."$FILE".polly.ll
+  echo "Polly bypassed" > "$TARGET"."$FILE".polly.log
+}
+
+#   -march="$ARCH" \
+
+function run-opt() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  time "$OPT" \
+  "$OPTIMIZATION_LEVEL" \
+  $OPTIMIZATION_OPTIONS_OPT \
+  -debug-pass-manager=verbose \
+  -debug \
+  -march="$TUNE" \
+  -mcpu="$TUNE" \
+  $LLVM_VECTORIZE \
+  -S \
+  -o "$TARGET"."$FILE".opt.ll \
+  "$TARGET"."$FILE".polly.ll \
+  > "$TARGET"."$FILE".opt.log \
+  2>&1
+}
+
+function run-llc() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  time "$LLC" \
+  "$OPTIMIZATION_LEVEL" \
+  $OPTIMIZATION_OPTIONS_LLC \
+  -debug-pass=Structure \
+  -debug \
+  -march="$ARCH" \
+  -mcpu="$TUNE" \
+  -o "$TARGET"."$FILE".s \
+  "$TARGET"."$FILE".opt.ll \
+  > "$TARGET"."$FILE".llc.log \
+  2>&1
+}
+
+function assemble() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$3"
+  FILE="$4"
+
+  "$ASSEMBLER" \
+  --filetype=obj \
+  -arch="$ARCH" \
+  $SME_ASSEMBLER \
+  -o "$TARGET"."$FILE".o \
+  "$TARGET"."$FILE".s
+}
+
+function link() {
+  TARGET="$1"
+  ARCH="$2"
+  TUNE="$4"
+  OBJS="$3"
+
+  $LINKER \
+  -o "$TARGET".exe \
+  $OBJS \
+  $ADDITIONAL_LDFLAGS
+}
+
+function just-cp() {
+  TARGET="$1"
+  FILE="$2"
+  cp "$FILE".ll.in "$TARGET"."$FILE".opt.ll
+}
+
+function just-cp-s() {
+  TARGET=$1
+  FILE=$2
+  cp $FILE.s.in $TARGET.$FILE.s
+}
+
+function run-toolchain() {
+  TARGET="$1" # For cross compilation
+  ARCH="$2"   # For llc and assembler
+  TUNE="$3"   # For everything clang and opt,
+              # used for march and mtune
+
+  # This only works if there are no
+  # name conflicts
+  Y=""
+  for N in $FILELIST; do
+    rsync "$N" .
+    I="${N%.*}"
+    Y="$(basename $I) $Y"
+  done
+
+  OBJS=""
+  TIMEFORMAT='%3U %3S'
+  { time { (
+  for N in $Y; do
+    run-clang "$TARGET" "$ARCH" "$TUNE" "$N"
+    if [ "$POLLY" = "on" ]; then
+      run-polly "$TARGET" "$ARCH" "$TUNE" "$N"
+    else
+      bypass-polly "$TARGET" "$ARCH" "$TUNE" "$N"
+    fi
+    run-opt "$TARGET" "$ARCH" "$TUNE" "$N"
+    run-llc "$TARGET" "$ARCH" "$TUNE" "$N"
+#   just-cp-s "$TARGET" "$N"
+    assemble "$TARGET" "$ARCH" "$TUNE" "$N"
+
+#   run-fast "$TARGET" "$ARCH" "$TUNE" "$N"
+#   run-clang-only "$TARGET" "$ARCH" "$TUNE" "$N"
+    OBJS="$TARGET.$N.o $OBJS"
+  done
+  link "$TARGET" "$ARCH" "$OBJS"
+  ); } 2> compilation.log; } 2> compilation-time.out
+time ./"$TARGET".exe 2>"$TARGET".sim.error.out 1> "$TARGET".sim.out
+}
+
+run-toolchain x86_64 x86-64 icelake-client
+# run-toolchain x86_64 x86-64 sapphirerapids
+# https://arxiv.org/pdf/2409.18779
+# https://scalable.uni-jena.de/opt/sme/micro.html
+# run-toolchain aarch64 aarch64 armv9.2-a

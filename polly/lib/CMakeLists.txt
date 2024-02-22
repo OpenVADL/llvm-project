@@ -37,6 +37,10 @@ set(POLLY_COMPONENTS
     Vectorize
 )
 
+set(LLVM_TARGET_DEFINITIONS Transform/ScopMatcherPatterns.td)
+tablegen(LLVM ScopMatcherPatterns.inc -gen-scop-matcher-patterns)
+add_public_tablegen_target(scop_matcher_pattern_gen)
+
 # Use an object-library to add the same files to multiple libs without requiring
 # the sources them to be recompiled for each of them.
 add_llvm_pass_plugin(Polly
@@ -87,6 +91,7 @@ add_llvm_pass_plugin(Polly
   Transform/ScopInliner.cpp
   Transform/ManualOptimizer.cpp
   Transform/MatmulOptimizer.cpp
+  Transform/ScopMatcher.cpp
   ${POLLY_HEADER_FILES}
 
   LINK_COMPONENTS

@@ -401,6 +401,17 @@ void IslNodeBuilder::createMark(__isl_take isl_ast_node *Node) {
     isl_id_free(Id);
     return;
   }
+  if (strcmp(isl_id_get_name(Id), "REPLACE_LOOP") == 0) {
+    assert(isl_ast_node_get_type(Child) == isl_ast_node_for && "Can only replace a loop");
+    ReplacementEmitter *emitter = (ReplacementEmitter *) isl_id_get_user(Id);
+    createForReplaced(emitter, Child);
+
+    // FIXME Maybe there is a better way
+    delete emitter;
+
+    isl_id_free(Id);
+    return;
+  }
 
   BandAttr *ChildLoopAttr = getLoopAttr(isl::manage_copy(Id));
   BandAttr *AncestorLoopAttr;
@@ -444,6 +455,60 @@ static bool IsLoopVectorizerDisabled(isl::ast_node_for Node) {
   if (strcmp(Id.get_name().c_str(), "Loop Vectorizer Disabled") == 0)
     return true;
   return false;
+}
+
+void IslNodeBuilder::createForReplaced(ReplacementEmitter *emitter,
+                                       isl_ast_node *For) {
+  isl::ast_node Body = isl::manage(For);
+  // FIXME Refactor this for multiple users
+  bool foundUser = false;
+  while ( ! foundUser) {
+    if (Body.isa<isl::ast_node_user>())
+      foundUser = true;
+    // Handle nested loops
+    else if (Body.isa<isl::ast_node_for>()) {
+      // Update the mapping from ID to value.
+      // Instead of the actual iterator variables (c1, c2, ...)
+      // we use the constant 0 since we are not interested
+      // in loops that are inside of the loop which is to be replaced.
+      isl::ast_node_for BodyFor = Body.as<isl::ast_node_for>();
+      isl::ast_expr iterator = BodyFor.get_iterator();
+      isl::id iteratorID = iterator.get_id();
+      IDToValue[iteratorID.get()] = Builder.getInt64(0);
+
+      // Set the upper bound of each nested loop.
+      CmpInst::Predicate Predicate;
+      isl::ast_expr UB = getUpperBound(BodyFor, Predicate);
+      Value *ValueUB = ExprBuilder.create(UB.release());
+      if (Predicate == CmpInst::ICMP_SLE)
+        ValueUB = Builder.CreateAdd(ValueUB, Builder.getInt64(1));
+      emitter->addUpperBound(ValueUB);
+
+      isl::ast_node nextBody = BodyFor.body();
+      Body = nextBody;
+    }
+    else if (Body.isa<isl::ast_node_mark>()) {
+      isl::ast_node_mark MarkFor = Body.as<isl::ast_node_mark>();
+      isl::ast_node nextBody = MarkFor.node();
+      Body = nextBody;
+    }
+    else
+      break;
+  }
+  assert(foundUser && "We need a user");
+
+  LoopToScevMapT LTS;
+  LTS.insert(OutsideLoopIterations.begin(), OutsideLoopIterations.end());
+
+  isl::ast_node_user BodyUser = Body.as<isl::ast_node_user>();
+  isl::ast_expr Expr = BodyUser.get_expr();
+  // This is necessary to access copies of the IVs and not the
+  // IV from the original loop.
+  createSubstitutions(Expr.release(), &emitter->Stmt, LTS);
+
+  isl::id_to_ast_expr NewAccesses = isl::manage(createNewAccesses(&emitter->Stmt, Body.get()));
+
+  BlockGen.insertLoopReplacement(emitter, LTS, NewAccesses.get());
 }
 
 void IslNodeBuilder::createForSequential(isl::ast_node_for For,

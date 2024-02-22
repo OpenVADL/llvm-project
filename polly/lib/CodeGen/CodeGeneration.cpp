@@ -271,7 +271,9 @@ static bool generateCode(Scop &S, IslAstInfo &AI, LoopInfo &LI,
     NodeBuilder.addParameters(S.getContext().release());
     Value *RTC = NodeBuilder.createRTC(AI.getRunCondition().release());
 
-    Builder.GetInsertBlock()->getTerminator()->setOperand(0, RTC);
+    // FIXME
+    Value *t = Builder.getTrue();
+    Builder.GetInsertBlock()->getTerminator()->setOperand(0, t);
 
     // Explicitly set the insert point to the end of the block to avoid that a
     // split at the builder's current

@@ -391,6 +391,7 @@ public:
   inline stat foreach_piece(const std::function<stat(isl::set, isl::aff)> &fn) const;
   inline stat foreach_piece(const std::function<stat(isl::set, isl::multi_aff)> &fn) const;
   inline stat foreach_pw_aff(const std::function<stat(isl::pw_aff)> &fn) const;
+  inline isl::val get_coefficient_val(isl::dim type, int pos) const;
   inline isl::set ge_set(isl::aff aff2) const;
   inline isl::set ge_set(const isl::pw_aff &pwaff2) const;
   inline isl::aff gist(isl::set context) const;
@@ -430,6 +431,7 @@ public:
   inline isl::pw_aff min(const isl::pw_aff &pwaff2) const;
   inline isl::multi_val min_multi_val() const;
   inline isl::aff mod(isl::val mod) const;
+  inline isl::aff mod(isl::aff mod) const;
   inline isl::aff mod(long mod) const;
   inline isl::aff mul(isl::aff aff2) const;
   inline isl::pw_aff mul(const isl::pw_aff &pwaff2) const;
@@ -1717,6 +1719,7 @@ public:
   inline isl::aff div(int pos) const;
   inline isl::aff get_div(int pos) const;
   inline isl::set drop_constraints_involving_dims(isl::dim type, unsigned int first, unsigned int n) const;
+  inline isl::basic_set drop_constraints_not_involving_dims(isl::dim type, unsigned int first, unsigned int n) const;
   inline isl::set eliminate(isl::dim type, unsigned int first, unsigned int n) const;
   inline boolean every_set(const std::function<boolean(isl::set)> &test) const;
   inline isl::set extract_set(const isl::space &space) const;
@@ -1901,6 +1904,7 @@ public:
 
   static inline isl::constraint alloc_equality(isl::local_space ls);
   static inline isl::constraint alloc_inequality(isl::local_space ls);
+  inline boolean involves_dims(isl::dim type, unsigned int first, unsigned int n) const;
   inline isl::constraint set_coefficient_si(isl::dim type, int pos, int v) const;
   inline isl::constraint set_constant_si(int v) const;
   inline isl::constraint set_constant_val(isl::val v) const;
@@ -2103,6 +2107,7 @@ public:
 
   inline isl::map add_constraint(isl::constraint constraint) const;
   inline isl::map add_dims(isl::dim type, unsigned int n) const;
+  inline isl::map insert_dims(isl::dim type, unsigned int pos, unsigned int n) const;
   inline isl::basic_map affine_hull() const;
   inline isl::map align_params(isl::space model) const;
   inline isl::map apply_domain(isl::map map2) const;
@@ -2140,6 +2145,7 @@ public:
   inline class size domain_tuple_dim() const;
   inline isl::id domain_tuple_id() const;
   inline isl::id get_domain_tuple_id() const;
+  inline isl::map drop_constraints_not_involving_dims(isl::dim type, unsigned int first, unsigned int n) const;
   static inline isl::map empty(isl::space space);
   inline isl::map eq_at(isl::multi_pw_aff mpa) const;
   inline isl::union_map eq_at(const isl::multi_union_pw_aff &mupa) const;
@@ -3642,6 +3648,7 @@ public:
 
   inline isl::union_set ast_build_options() const;
   inline isl::union_set get_ast_build_options() const;
+  inline isl::space get_space() const;
   inline isl::set ast_isolate_option() const;
   inline isl::set get_ast_isolate_option() const;
   inline boolean member_get_coincident(int pos) const;
@@ -3658,6 +3665,7 @@ public:
   inline schedule_node_band set_permutable(int permutable) const;
   inline schedule_node_band shift(isl::multi_union_pw_aff shift) const;
   inline schedule_node_band split(int pos) const;
+  inline schedule_node sink() const;
   inline schedule_node_band tile(isl::multi_val sizes) const;
   inline schedule_node_band member_set_ast_loop_default(int pos) const;
   inline schedule_node_band member_set_ast_loop_atomic(int pos) const;
@@ -3929,6 +3937,7 @@ public:
   inline std::string dim_name(isl::dim type, unsigned int pos) const;
   inline std::string get_dim_name(isl::dim type, unsigned int pos) const;
   inline isl::set drop_constraints_involving_dims(isl::dim type, unsigned int first, unsigned int n) const;
+  inline isl::set drop_constraints_not_involving_dims(isl::dim type, unsigned int first, unsigned int n) const;
   inline isl::set eliminate(isl::dim type, unsigned int first, unsigned int n) const;
   static inline isl::set empty(isl::space space);
   inline boolean every_set(const std::function<boolean(isl::set)> &test) const;
@@ -5208,6 +5217,12 @@ stat aff::foreach_pw_aff(const std::function<stat(isl::pw_aff)> &fn) const
   return isl::pw_aff(*this).foreach_pw_aff(fn);
 }
 
+isl::val isl::aff::get_coefficient_val(isl::dim type, int pos) const
+{
+  auto res = isl_aff_get_coefficient_val(get(),  static_cast<enum isl_dim_type>(type), pos);
+  return manage(res);
+}
+
 isl::set aff::ge_set(isl::aff aff2) const
 {
   auto res = isl_aff_ge_set(copy(), aff2.release());
@@ -5402,6 +5417,15 @@ isl::pw_aff aff::min(const isl::pw_aff &pwaff2) const
 isl::multi_val aff::min_multi_val() const
 {
   return isl::pw_aff(*this).min_multi_val();
+}
+
+isl::aff aff::mod(isl::aff mod) const
+{
+  isl::aff res = (*this).div(mod);
+  res = res.floor();
+  res = res.mul(mod);
+  res = (*this).sub(res);
+  return res;
 }
 
 isl::aff aff::mod(isl::val mod) const
@@ -9224,6 +9248,12 @@ isl::set basic_set::drop_constraints_involving_dims(isl::dim type, unsigned int 
   return isl::set(*this).drop_constraints_involving_dims(type, first, n);
 }
 
+isl::basic_set basic_set::drop_constraints_not_involving_dims(isl::dim type, unsigned int first, unsigned int n) const
+{
+  auto res = isl_basic_set_drop_constraints_not_involving_dims(copy(), static_cast<enum isl_dim_type>(type), first, n);
+  return manage(res);
+}
+
 isl::set basic_set::eliminate(isl::dim type, unsigned int first, unsigned int n) const
 {
   return isl::set(*this).eliminate(type, first, n);
@@ -10046,6 +10076,12 @@ isl::constraint constraint::alloc_inequality(isl::local_space ls)
   return manage(res);
 }
 
+boolean constraint::involves_dims(isl::dim type, unsigned int first, unsigned int n) const
+{
+  auto res = isl_constraint_involves_dims(get(), static_cast<enum isl_dim_type>(type), first, n);
+  return manage(res);
+}
+
 isl::constraint constraint::set_coefficient_si(isl::dim type, int pos, int v) const
 {
   auto res = isl_constraint_set_coefficient_si(copy(), static_cast<enum isl_dim_type>(type), pos, v);
@@ -10639,6 +10675,12 @@ isl::map map::add_dims(isl::dim type, unsigned int n) const
   return manage(res);
 }
 
+isl::map map::insert_dims(isl::dim type, unsigned int pos, unsigned int n) const
+{
+  auto res = isl_map_insert_dims(copy(), static_cast<enum isl_dim_type>(type), pos, n);
+  return manage(res);
+}
+
 isl::basic_map map::affine_hull() const
 {
   auto res = isl_map_affine_hull(copy());
@@ -10846,6 +10888,12 @@ isl::id map::domain_tuple_id() const
 isl::id map::get_domain_tuple_id() const
 {
   return domain_tuple_id();
+}
+
+isl::map map::drop_constraints_not_involving_dims(isl::dim type, unsigned int first, unsigned int n) const
+{
+  auto res = isl_map_drop_constraints_not_involving_dims(copy(), static_cast<enum isl_dim_type>(type), first, n);
+  return manage(res);
 }
 
 isl::map map::empty(isl::space space)
@@ -17877,6 +17925,12 @@ isl::union_set schedule_node_band::ast_build_options() const
   return manage(res);
 }
 
+isl::space schedule_node_band::get_space() const
+{
+  auto res = isl_schedule_node_band_get_space(get());
+  return manage(res);
+}
+
 isl::union_set schedule_node_band::get_ast_build_options() const
 {
   return ast_build_options();
@@ -17973,6 +18027,12 @@ schedule_node_band schedule_node_band::split(int pos) const
 {
   auto res = isl_schedule_node_band_split(copy(), pos);
   return manage(res).as<schedule_node_band>();
+}
+
+schedule_node schedule_node_band::sink() const
+{
+  auto res = isl_schedule_node_band_sink(copy());
+  return manage(res);
 }
 
 schedule_node_band schedule_node_band::tile(isl::multi_val sizes) const
@@ -18676,6 +18736,12 @@ std::string set::get_dim_name(isl::dim type, unsigned int pos) const
 isl::set set::drop_constraints_involving_dims(isl::dim type, unsigned int first, unsigned int n) const
 {
   auto res = isl_set_drop_constraints_involving_dims(copy(), static_cast<enum isl_dim_type>(type), first, n);
+  return manage(res);
+}
+
+isl::set set::drop_constraints_not_involving_dims(isl::dim type, unsigned int first, unsigned int n) const
+{
+  auto res = isl_set_drop_constraints_not_involving_dims(copy(), static_cast<enum isl_dim_type>(type), first, n);
   return manage(res);
 }
 

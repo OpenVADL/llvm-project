@@ -32,6 +32,8 @@
 using namespace llvm;
 using namespace polly;
 
+#define DEBUG_TYPE "polly-block-generator"
+
 static cl::opt<bool> Aligned("enable-polly-aligned",
                              cl::desc("Assumed aligned memory accesses."),
                              cl::Hidden, cl::cat(PollyCategory));
@@ -394,6 +396,32 @@ void BlockGenerator::removeDeadInstructions(BasicBlock *BB, ValueMapT &BBMap) {
     NewInst->eraseFromParent();
     I = NewBB->rbegin();
   }
+}
+
+void BlockGenerator::insertLoopReplacement(ReplacementEmitter *emitter,
+                                           LoopToScevMapT &LTS,
+                                           isl_id_to_ast_expr *NewAccesses) {
+  BasicBlock *BB = emitter->Stmt.getBasicBlock();
+  const DebugLoc &DbgLoc = BB->getTerminator()->getDebugLoc();
+  BasicBlock *CopyBB = SplitBlock(Builder.GetInsertBlock(),
+                                  &*Builder.GetInsertPoint(), &DT, &LI);
+  CopyBB->setName("polly.stmt.replacement." + BB->getName());
+  Builder.SetInsertPoint(&CopyBB->front());
+
+  ValueMapT BBMap;
+  auto genLoc = [&](Instruction *I) {
+    MemAccInst MemInstruction(I);
+    Value *NewPointer = generateLocationAccessed(emitter->Stmt, MemInstruction, BBMap, LTS, NewAccesses);
+    return NewPointer;
+  };
+
+  // FIXME find out if we need this
+  // generateScalarLoads(emitter->Stmt, LTS, BBMap, NewAccesses);
+  // generateBeginStmtTrace(emitter->Stmt, LTS, BBMap);
+
+  emitter->emit(Builder, DbgLoc, genLoc);
+
+  EntryBB = &CopyBB->getParent()->getEntryBlock();
 }
 
 void BlockGenerator::copyStmt(ScopStmt &Stmt, LoopToScevMapT &LTS,

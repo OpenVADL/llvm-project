@@ -1673,6 +1673,27 @@ template <typename T0, unsigned Opcode> struct OneOps_match {
   }
 };
 
+template <typename T0, unsigned Opcode> struct OneOps_match_bind {
+  T0 Op1;
+  Instruction *&I;
+
+  OneOps_match_bind(const T0 &Op1, Instruction *&I) : Op1(Op1), I(I) {}
+
+  template <typename OpTy> bool match(OpTy *V) {
+    if (auto *CV = dyn_cast<Instruction>(V)) {
+      I = CV;
+    }
+    else {
+      return false;
+    }
+    if (V->getValueID() == Value::InstructionVal + Opcode) {
+      auto *I = cast<Instruction>(V);
+      return Op1.match(I->getOperand(0));
+    }
+    return false;
+  }
+};
+
 /// Matches instructions with Opcode and three operands.
 template <typename T0, typename T1, unsigned Opcode> struct TwoOps_match {
   T0 Op1;
@@ -1681,6 +1702,29 @@ template <typename T0, typename T1, unsigned Opcode> struct TwoOps_match {
   TwoOps_match(const T0 &Op1, const T1 &Op2) : Op1(Op1), Op2(Op2) {}
 
   template <typename OpTy> bool match(OpTy *V) {
+    if (V->getValueID() == Value::InstructionVal + Opcode) {
+      auto *I = cast<Instruction>(V);
+      return Op1.match(I->getOperand(0)) && Op2.match(I->getOperand(1));
+    }
+    return false;
+  }
+};
+
+/// Matches instructions with Opcode and three operands.
+template <typename T0, typename T1, unsigned Opcode> struct TwoOps_match_bind {
+  T0 Op1;
+  T1 Op2;
+  Instruction *&I;
+
+  TwoOps_match_bind(const T0 &Op1, const T1 &Op2, Instruction *&I) : Op1(Op1), Op2(Op2), I(I) {}
+
+  template <typename OpTy> bool match(OpTy *V) {
+    if (auto *CV = dyn_cast<Instruction>(V)) {
+      I = CV;
+    }
+    else {
+      return false;
+    }
     if (V->getValueID() == Value::InstructionVal + Opcode) {
       auto *I = cast<Instruction>(V);
       return Op1.match(I->getOperand(0)) && Op2.match(I->getOperand(1));
@@ -1862,6 +1906,12 @@ inline OneOps_match<OpTy, Instruction::Load> m_Load(const OpTy &Op) {
   return OneOps_match<OpTy, Instruction::Load>(Op);
 }
 
+/// Matches LoadInst and captures.
+template <typename OpTy>
+inline OneOps_match_bind<OpTy, Instruction::Load> m_Load(const OpTy &Op, Instruction *&I) {
+  return OneOps_match_bind<OpTy, Instruction::Load>(Op, I);
+}
+
 /// Matches StoreInst.
 template <typename ValueOpTy, typename PointerOpTy>
 inline TwoOps_match<ValueOpTy, PointerOpTy, Instruction::Store>
@@ -1881,6 +1931,15 @@ template <typename PointerOpTy, typename OffsetOpTy>
 inline PtrAdd_match<PointerOpTy, OffsetOpTy>
 m_PtrAdd(const PointerOpTy &PointerOp, const OffsetOpTy &OffsetOp) {
   return PtrAdd_match<PointerOpTy, OffsetOpTy>(PointerOp, OffsetOp);
+}
+
+/// Matches StoreInst and captures.
+template <typename ValueOpTy, typename PointerOpTy>
+inline TwoOps_match_bind<ValueOpTy, PointerOpTy, Instruction::Store>
+m_Store(const ValueOpTy &ValueOp, const PointerOpTy &PointerOp, Instruction *&I) {
+  return TwoOps_match_bind<ValueOpTy, PointerOpTy, Instruction::Store>(ValueOp,
+                                                                       PointerOp,
+                                                                       I);
 }
 
 //===----------------------------------------------------------------------===//

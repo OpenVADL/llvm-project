@@ -28,6 +28,7 @@
 #include "polly/DependenceInfo.h"
 #include "polly/ForwardOpTree.h"
 #include "polly/JSONExporter.h"
+#include "polly/ScopMatcher.h"
 #include "polly/LinkAllPasses.h"
 #include "polly/MaximalStaticExpansion.h"
 #include "polly/PolyhedralInfo.h"
@@ -225,6 +226,8 @@ void initializePollyPasses(llvm::PassRegistry &Registry) {
   initializeJSONExporterPass(Registry);
   initializeJSONImporterPass(Registry);
   initializeJSONImporterPrinterLegacyPassPass(Registry);
+  initializeScopMatcherPass(Registry);
+  initializeScopMatcherPrinterLegacyPassPass(Registry);
   initializeMaximalStaticExpanderWrapperPassPass(Registry);
   initializeIslAstInfoWrapperPassPass(Registry);
   initializeIslAstInfoPrinterLegacyPassPass(Registry);

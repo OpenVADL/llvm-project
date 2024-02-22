@@ -1,0 +1,3 @@
+# Cut out the include search paths reported by gcc
+# https://stackoverflow.com/questions/38972736/how-to-print-lines-between-two-patterns-inclusive-or-exclusive-in-sed-awk-or
+GCC_SEARCH=$($GCC -v -E - < /dev/null 2>&1 | sed -n '/starts/,/End/{/starts/!{/End/!p;};}' | sed -n 's/^/-I/p' | tr '\n' ' ')

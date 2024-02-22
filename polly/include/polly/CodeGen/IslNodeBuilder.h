@@ -17,6 +17,7 @@
 #include "polly/CodeGen/BlockGenerators.h"
 #include "polly/CodeGen/IslExprBuilder.h"
 #include "polly/ScopDetectionDiagnostic.h"
+#include "polly/ScopMatcher.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/IR/InstrTypes.h"
@@ -311,6 +312,8 @@ protected:
   bool preloadInvariantEquivClass(InvariantEquivClassTy &IAClass);
 
   void createForSequential(isl::ast_node_for For, bool MarkParallel);
+
+  void createForReplaced(ReplacementEmitter *emitter, isl_ast_node *Child);
 
   /// Create LLVM-IR that executes a for node thread parallel.
   ///
